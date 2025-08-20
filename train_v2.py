@@ -10,18 +10,23 @@ from transformers import (
 from datasets import load_dataset, IterableDataset
 
 tokenizer = AutoTokenizer.from_pretrained("gpt2")
-tokenizer.eos_token = "<|endoftext|>"
-tokenizer.bos_token = "<|startoftext|>"
-tokenizer.pad_token = "<|pad|>"
-tokenizer.unk_token = "<|unk|>"
+vocab_size = len(tokenizer)
+print(f"Vocab size: {vocab_size}")
+special_tokens_dict = {
+    "eos_token": "<|endoftext|>",
+    "bos_token": "<|startoftext|>",
+    "pad_token": "<|pad|>",
+    "unk_token": "<|unk|>",
+}
+tokenizer.add_special_tokens(special_tokens_dict)
 
-vocab_size = tokenizer.vocab_size
+vocab_size = len(tokenizer)
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 print(f"Using device: {device}")
 print(f"Vocab size: {vocab_size}")
 
-context_size = 1024 * 2
+context_size = 2048
 n_positions = context_size
 n_layer = 12
 n_head = 12
@@ -40,7 +45,44 @@ config = Qwen2Config(
 	intermediate_size=hidden_size * 4,
 	bos_token_id=tokenizer.bos_token_id,
 	eos_token_id=tokenizer.eos_token_id,
+	pad_token_id=tokenizer.pad_token_id,
 )
+
+model = AutoModelForCausalLM.from_config(config)
+model.resize_token_embeddings(len(tokenizer))
+model.to(device)
+
+# Load dataset using datasets library
+raw_dataset = load_dataset("allenai/c4", "en.noblocklist", split="train", streaming=True)
+
+def tokenize_function(examples):
+	return tokenizer(examples["text"])
+
+tokenized_dataset = raw_dataset.map(
+    tokenize_function,
+    batched=True,
+    remove_columns=raw_dataset.column_names, # Remove old text columns
+)
+
+def group_texts(examples):
+    # Concatenate all texts.
+    concatenated_examples = {k: list(itertools.chain(*examples[k])) for k in examples.keys()}
+    total_length = len(concatenated_examples[list(examples.keys())[0]])
+    
+    # We drop the small remainder, though you could pad instead
+    if total_length >= context_size:
+        total_length = (total_length // context_size) * context_size
+    
+    # Split by chunks of context_size.
+    result = {
+        k: [t[i : i + context_size] for i in range(0, total_length, context_size)]
+        for k, t in concatenated_examples.items()
+    }
+    result["labels"] = result["input_ids"].copy()
+    return result
+
+
+processed_dataset = tokenized_dataset.shuffle(buffer_size=1000).map(group_texts, batched=True)
 
 training_args = TrainingArguments(
 	output_dir=checkpoint_dir,
@@ -63,53 +105,6 @@ training_args = TrainingArguments(
 	ignore_data_skip=True,
 )
 
-model = AutoModelForCausalLM.from_config(config)
-model.to(device)
-
-# Load dataset using datasets library
-dataset = load_dataset("text", data_files={"train": "./data/texts/c4/c4_sample.txt"}, streaming=True)["train"]
-
-def tokenize_function(examples):
-	return tokenizer(examples["text"])
-
-def create_token_blocks(dataset_stream, block_size, num_to_skip=0):
-	# Buffer for concatenated token IDs
-	buffer = []
-	
-	# Counter for blocks yielded
-	blocks_yielded = 0
-	last_log_step = 0
-
-	print("Starting dataset processing...")
-	for item in dataset_stream:
-		# Tokenize each text individually
-		tokenized_text = tokenize_function(item)
-		buffer.extend(tokenized_text['input_ids'])
-		
-		# Yield blocks of the specified size
-		while len(buffer) >= block_size:
-			if blocks_yielded < num_to_skip:
-				# We are in the skipping phase
-				buffer = buffer[block_size:]
-				blocks_yielded += 1
-				if blocks_yielded % 1000 == 0 and blocks_yielded > last_log_step:
-					print(f"Skipped {blocks_yielded}/{num_to_skip} blocks...")
-					last_log_step = blocks_yielded
-				continue
-
-			if blocks_yielded == num_to_skip and num_to_skip > 0:
-				print(f"Finished skipping {num_to_skip} blocks. Starting training.")
-				# To avoid printing this message on every subsequent block
-				num_to_skip = -1 
-
-			block = buffer[:block_size]
-			buffer = buffer[block_size:]
-			yield {"input_ids": block, "labels": block.copy()}
-
-processed_dataset = IterableDataset.from_generator(
-    create_token_blocks, gen_kwargs={"dataset_stream": dataset, "block_size": block_size}
-)
-
 data_collator = DataCollatorForLanguageModeling(
 	tokenizer=tokenizer,
 	mlm=False,
@@ -121,9 +116,6 @@ trainer = Trainer(
 	data_collator=data_collator,
 	train_dataset=processed_dataset,
 )
-
-trainer.tokenizer.model_max_length = block_size
-trainer.tokenizer.chat_template = "{% for message in messages %}{% if message['role'] == 'system' %}{{ '<|im_start|>system\n' + message['content'] + '<|im_end|>\n' }}{% elif message['role'] == 'user' %}{{ '<|im_start|>user\n' + message['content'] + '<|im_end|>\n' }}{% elif message['role'] == 'assistant' %}{{ '<|im_start|>assistant\n' + message['content'] + '<|im_end|>\n' }}{% endif %}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant\n' }}{% endif %}"
 
 trainer.train()
 trainer.save_model(final_output_dir)
