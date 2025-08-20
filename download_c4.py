@@ -1,6 +1,8 @@
 import os
 from datasets import load_dataset
 
+# Model was trained with just en, I set it to en.noblocklist after learning about
+# what it was
 dataset = load_dataset("allenai/c4", "en.noblocklist", split="train", streaming=True)
 
 target_size_gb = 385
