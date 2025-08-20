@@ -88,7 +88,7 @@ training_args = TrainingArguments(
 	output_dir=checkpoint_dir,
 	overwrite_output_dir=True,
 	# I set the max_steps to 100000 but only trained to 80k-ish
-	max_steps=100000,
+	max_steps=40000,
 	per_device_train_batch_size=4,
 	gradient_accumulation_steps=8,
 	fp16=True,
@@ -98,7 +98,7 @@ training_args = TrainingArguments(
 	lr_scheduler_type="cosine",
 	warmup_ratio=0.01,
 	save_strategy="steps",
-	save_steps=100,
+	save_steps=1000,
 	# Only save 3 previous iterations
 	save_total_limit=3,
 	logging_steps=10,
