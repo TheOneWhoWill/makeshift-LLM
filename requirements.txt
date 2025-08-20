@@ -1,0 +1,4 @@
+transformers
+datasets
+accelerate
+torch --extra-index-url https://download.pytorch.org/whl/cu121
