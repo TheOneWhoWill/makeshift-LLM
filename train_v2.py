@@ -89,7 +89,7 @@ training_args = TrainingArguments(
 	overwrite_output_dir=True,
 	# I set the max_steps to 100000 but only trained to 80k-ish
 	max_steps=100000,
-	per_device_train_batch_size=8,
+	per_device_train_batch_size=4,
 	gradient_accumulation_steps=8,
 	fp16=True,
 	learning_rate=5e-5,
